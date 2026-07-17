@@ -6,3 +6,5 @@
 3_align/hisat2_bam/
 4_quantify/gtfs/
 env/
+
+.DS_Store
