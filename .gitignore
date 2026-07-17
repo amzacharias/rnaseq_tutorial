@@ -1,0 +1,8 @@
+0_data/gencode/
+0_data/raw_reads/
+2_trim/trimmed_reads/
+3_align/hisat2_index/
+3_align/hisat2_sam/
+3_align/hisat2_bam/
+4_quantify/gtfs/
+env/
