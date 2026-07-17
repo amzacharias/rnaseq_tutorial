@@ -186,11 +186,7 @@ Useful commands:
 squeue -u "$USER"
 ```
 
-```bash
-grep -i "error\|failed" 1_qc/*.err 2_trim/*.err 3_align/*.err 4_quantify/*.err
-```
-
-Always inspect relevant `.err` files before continuing to the next stage.
+Always inspect relevant `.out` and `.err` files before continuing to the next stage.
 
 ## Tutorial Documents
 
