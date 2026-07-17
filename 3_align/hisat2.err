@@ -1,0 +1,122 @@
+
+Inactive Modules:
+  1) libffi/3.3
+
+Due to MODULEPATH changes, the following have been reloaded:
+  1) mii/1.1.2
+
+The following have been reloaded with a version change:
+  1) StdEnv/2020 => StdEnv/2023           5) libfabric/1.10.1 => libfabric/1.18.0
+  2) gcccore/.9.3.0 => gcccore/.12.3      6) openmpi/4.0.3 => openmpi/4.1.5
+  3) gentoo/2020 => gentoo/2023           7) python/3.9.6 => python/3.11.5
+  4) imkl/2020.1.217 => imkl/2023.2.0     8) ucx/1.8.0 => ucx/1.14.1
+
+Applying preset: 'sensitive' using preset menu 'V0'
+Final policy string: 'SEED=0,22;DPS=15;ROUNDS=2;IVAL=S,1,1.15'
+Entered driver(): 18:55:52
+Creating PatternSource: 18:55:52
+Opening hit output file: 18:55:52
+About to initialize fw GFM: 18:55:52
+  About to open input files: 18:55:52
+Opening "./hisat2_index/GRCm39_index.1.ht2"
+Opening "./hisat2_index/GRCm39_index.2.ht2"
+  Finished opening input files: 18:55:52
+  Reading header: 18:55:52
+Headers:
+    len: 2654621783
+    gbwtLen: 2659959730
+    nodes: 2659678485
+    sz: 1327310892
+    gbwtSz: 1329979866
+    lineRate: 7
+    offRate: 4
+    offMask: 0xfffffff0
+    ftabChars: 10
+    eftabLen: 20
+    eftabSz: 80
+    ftabLen: 1048577
+    ftabSz: 4194308
+    offsLen: 166229906
+    offsSz: 664919624
+    lineSz: 128
+    sideSz: 128
+    sideGbwtSz: 104
+    sideGbwtLen: 208
+    numSides: 12788268
+    numLines: 12788268
+    gbwtTotLen: 1636898304
+    gbwtTotSz: 1636898304
+    reverse: 0
+    linearFM: No
+Reading plen (61): 18:55:53
+Opening "./hisat2_index/GRCm39_index.7.ht2"
+Opening "./hisat2_index/GRCm39_index.8.ht2"
+  About to open input files: 18:55:53
+Opening "./hisat2_index/GRCm39_index.1.ht2"
+Opening "./hisat2_index/GRCm39_index.2.ht2"
+  Finished opening input files: 18:55:53
+  Reading header: 18:55:53
+Reading plen (61): 18:55:53
+Reading rstarts (1059): 18:55:53
+Reading ebwt (1636898304): 18:55:53
+Reading fchr (5)
+Reading ftab (1048577): 18:56:07
+Reading eftab (20): 18:56:07
+Reading offs (166229906 32-bit words): 18:56:07
+Headers:
+    len: 2654621783
+    gbwtLen: 2659959730
+    nodes: 2659678485
+    sz: 1327310892
+    gbwtSz: 1329979866
+    lineRate: 7
+    offRate: 4
+    offMask: 0xfffffff0
+    ftabChars: 10
+    eftabLen: 20
+    eftabSz: 80
+    ftabLen: 1048577
+    ftabSz: 4194308
+    offsLen: 166229906
+    offsSz: 664919624
+    lineSz: 128
+    sideSz: 128
+    sideGbwtSz: 104
+    sideGbwtLen: 208
+    numSides: 12788268
+    numLines: 12788268
+    gbwtTotLen: 1636898304
+    gbwtTotSz: 1636898304
+    reverse: 0
+    linearFM: No
+  About to open input files: 18:56:12
+Opening "./hisat2_index/GRCm39_index.5.ht2"
+Opening "./hisat2_index/GRCm39_index.6.ht2"
+  Finished opening input files: 18:56:12
+  Reading header: 18:56:12
+    number of local indexes: 48474
+    local offRate: 3
+    local ftabLen: 4096
+    local ftabSz: 8192
+Time loading forward index: 00:00:38
+Read 61 reference strings from 374 records: 18:56:32
+Time loading reference: 00:00:06
+Dispatching to search driver: 18:56:38
+Multiseed full-index search: 00:00:09
+927174 reads; of these:
+  927174 (100.00%) were paired; of these:
+    38190 (4.12%) aligned concordantly 0 times
+    830090 (89.53%) aligned concordantly exactly 1 time
+    58894 (6.35%) aligned concordantly >1 times
+    ----
+    38190 pairs aligned concordantly 0 times; of these:
+      972 (2.55%) aligned discordantly 1 time
+    ----
+    37218 pairs aligned 0 times concordantly or discordantly; of these:
+      74436 mates make up the pairs; of these:
+        41322 (55.51%) aligned 0 times
+        29396 (39.49%) aligned exactly 1 time
+        3718 (4.99%) aligned >1 times
+97.77% overall alignment rate
+Time searching: 00:00:16
+Overall time: 00:00:55

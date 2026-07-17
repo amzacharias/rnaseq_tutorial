@@ -1,0 +1,800 @@
+---
+title: "Transcriptomics Tutorial - Count matrix preparation and analysis"
+output:
+  word_document:
+    toc: false
+  html_document:
+    theme: readable
+    highlight: default
+    toc: false
+    toc_float: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Part 2: Count matrix preparation and analysis
+
+In this part of this tutorial, we will analyze a gene count matrix with 6 samples.
+
+In addition to the sample preprocessed in part 1, the count matrix also contains 2 samples from dusk 
+and 3 samples from dawn (the transition between nighttime and daylight).
+
+- Gene Expression Omnibus (GEO) link to the dataset: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE151567
+- Published in: Zacharias AM, O'Connor CD, Topouza DG, Fang ZY, Ghazinejad H, Chen H, Duan Q, Ghasemlou N. Site- and cell-type-specific miRNA and mRNA genes and networks across the cortex, striatum, and hypothalamus. Commun Biol. 2025 Jul 1;8(1):969. doi: 10.1038/s42003-025-08371-7. PMID: 40594985; PMCID: PMC12218356.
+
+In this tutorial we will:
+
+1. Perform sample outlier detection using the gene count matrix.
+2. Normalize gene counts.
+3. Non-specific filtering of lowly variable genes.
+3. Differential expression analysis using EdgeR.
+4. Enrichment analysis of differentially expressed genes using g:Profiler.
+
+> NOTE: So far in this class, we have had you run R code in an Rscript file (`*.R`).
+> Another option is to run R code in an R Markdown file (`*.Rmd`), which allows you to combine R code with text and images.
+> R Markdown uses markdown synatx to format text, similar to how Jupyter notebooks use markdown.
+> R Markdown files can also be rendered into HTML, PDF, or Word documents, which is how this tutorial's files were created.
+> Using either an Rscript or R Markdown file is fine. Do what is comfortable for you, but give both file-types a try.
+
+This tutorial loads packages when they become relevant, rather than all at once.
+However, **remember that it is best practice to load all packages at the beginning of your script**.
+
+## 1. Setup
+
+### 1.1 Project folder setup
+
+We will remain in the same project folder as part 1 of this tutorial.
+The following is how the directory structure should look at this point:
+
+```
+rnaseq_tutorial
+├── 0_data/
+│   ├── raw_reads/
+│   └── gencode/
+│   └── coldata.csv
+│   └── counts.csv
+│   └── id2name.csv
+├── 1_qc/
+├── 2_trim/
+├── 3_align/
+└── 4_quantify/
+```
+
+This time we will be using the `coldata.csv`, `counts.csv`, and `id2name.csv` files in the `0_data` directory, 
+which contain the sample metadata, gene count matrix, and gene ID to gene name mapping, respectively.
+
+
+### 1.2 Setup
+
+Before we get started, let's setup our dataframes and orient ourselves.
+
+Setup a folder to store data preparation scripts and results. Enter the new directory.
+
+``` {bash eval=FALSE}
+# Paths assume that your current working directory is the project folder.
+mkdir 5_data_prep
+cd 5_data_prep
+```
+
+```
+rnaseq_tutorial
+├── 0_data/
+│   ├── raw_reads/
+│   └── gencode/
+├── 1_qc/
+├── 2_trim/
+├── 3_align/
+├── 4_quantify/
+└── 5_data_prep/
+```
+
+Create an R script or R markdown file in the `5_data_prep` directory.
+Remember to take notes in our scripts about what the script is for, who made the script, when it was created, etc.
+We will use this file to read in the count matrix, id2name, and coldata, and prepare output directories for the next steps.
+
+``` {r eval=FALSE}
+# Get your current working directory
+getwd()
+
+# If your working directory isn't the project folder, set it to the project folder.
+setwd("/global/teaching-home/<your_username>/rnaseq_tutorial")
+
+# Pathways -----------------------------------------------
+## Inputs ============
+data_dir <- "0_data"
+counts_path <- file.path(data_dir, "counts.csv") # file.path is similar to `os.path.join` in Python.
+coldata_path <- file.path(data_dir, "coldata.csv")
+id2name_path <- file.path(data_dir, "id2name.csv")
+
+## Outputs ===========
+prep_dir <- "5_data_prep"
+dataframes_dir <- file.path(prep_dir, "dataframes")
+figures_dir <- file.path(prep_dir, "figures")
+rdata_dir <- file.path(prep_dir, "rdata")
+
+# Create the output directories using R instead of unix.
+dir.create(dataframes_dir)
+dir.create(figures_dir)
+dir.create(rdata_dir)
+
+# Load data -----------------------------------------------
+counts <- read.csv(counts_path, row.names = 1)
+coldata <- read.csv(coldata_path, row.names = 1)
+id2name <- read.csv(id2name_path, row.names = 1)
+```
+
+
+Now that we've read in the dataframes, let's inspect them to make sure they look correct.
+
+Beginning with the sample metadata (coldata).
+
+``` {r eval=FALSE}
+nrow(coldata) # number of samples
+ncol(coldata) # number of columns in the coldata dataframe
+head(coldata) # first 10 rows of the coldata dataframe
+summary(coldata) # summary statistics of the coldata dataframe
+```
+
+Next, the count matrix
+
+``` {r eval=FALSE}
+nrow(counts) # number of samples
+ncol(counts) # number of columns in the count matrix
+head(counts) # first 10 rows of the count matrix
+```
+
+Next, the gene id to name mapping (id2name)
+
+``` {r eval=FALSE}
+nrow(id2name) # number of genes
+head(id2name) # first 10 rows of the id2name dataframe
+```
+
+Do the gene names in the count matrix match the gene names in the id2name dataframe?
+
+``` {r eval=FALSE}
+# Are all gene
+all(rownames(counts) %in% id2name$gene_name) # should return TRUE
+all(id2name$gene_name %in% rownames(counts)) # should return TRUE
+```
+
+Finally, let's make sure that the order of samples is the same in both the coldata and count matrix dataframes.
+The `Run` column in coldata corresponds to the fastq filenames, which are also now the column names of the count matrix.
+
+``` {r eval=FALSE}
+all(coldata$Run == colnames(counts)) # should return TRUE
+
+# If the order of the samples is not the same, we can reorder the count matrix to match the coldata.
+counts <- counts[, coldata$Run]
+```
+
+Let's pause to save our current progress.
+
+``` {r eval=FALSE}
+# Save the dataframes as CSV files
+write.csv(counts, file.path(dataframes_dir, "raw_counts.csv"))
+write.csv(id2name, file.path(dataframes_dir, "id2name.csv"))
+write.csv(coldata, file.path(dataframes_dir, "coldata.csv"))
+```
+
+## 3 Sample outlier detection
+
+Now that we've preliminarily wrangled our data and inspected it, let's perform sample outlier detection.
+To do this, we will take a fairly straightforward approach of seeing how the samples cluster
+together based on their gene expression profiles. 
+If a sample is an outlier, we would expect it to cluster away from the other samples.
+
+### 3.1 Variance stabilizing transformation
+
+Before clustering, we need to apply variance stabilizing transformation (VST) to the count matrix.
+VST is a transformation method implemented in the `DESeq2` package that prevents highly expressed genes
+from dominating the clustering results. You can think of it as being similar to a log transformation, 
+but it is more robust to the statistical properties of RNA-seq count data.
+
+Prior to being able to do VST, we will
+
+1. Create a DESeq2 dataset object from the count matrix and coldata.
+2. Estimate the normalization size factors for the samples, allowing standard normalization of the count matrix.
+3. Apply the VST to the normalized count matrix.
+
+- DESeq2 vignette: https://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+- DESeq2 paper: Love MI, Huber W, Anders S. Moderated estimation of fold change and dispersion for RNA-seq data with DESeq2. Genome Biol. 2014;15(12):550. doi: 10.1186/s13059-014-0550-8. PMID: 25516281; PMCID: PMC4302049.
+
+``` {r eval=FALSE}
+BiocManager::install("DESeq2") # if you haven't already installed DESeq2
+library(DESeq2) # v1.48.2
+
+dds <- DESeqDataSetFromMatrix(round(counts), coldata, design = ~ time)
+dds <- estimateSizeFactors(dds)
+vst <- varianceStabilizingTransformation(dds, blind = TRUE)
+```
+
+- `round(counts)` rounds the gene counts to the nearest integer, which is required for DESeq2.
+- `design = ~ time` specifies that time is the experimental condition of interest for testing. This does not affect VST transformation.
+- `blind = TRUE` means that the VST will be applied without using the sample information.
+
+If you want, try to create a distribution plot (e.g., histogram) to compare the distribution of
+gene counts before and after VST.
+
+### 3.2 Clustering
+
+We will now perform Principal Component Analysis (PCA) on the VST-transformed count matrix to visualize 
+how the samples cluster together. We are using the `plotPCA` function from the `DESeq2` package.
+You could also do t-SNE, hierarchical clustering, or other clustering methods, but PCA is a good starting point.
+
+``` {r eval=FALSE}
+# Perform principal component analysis
+pca_data <- plotPCA(vst, intgroup = c("Run", "time"), returnData = TRUE)
+
+# Calculate the percentage of variance explained by each principal component
+percent_var <- round(100 * attr(pca_data, "percentVar"))
+```
+
+You could simply create a PCA plot with the `plotPCA` function, but we will take a more
+advanced approach and use `ggplot2` to create a more customizable PCA plot.
+
+``` {r eval=FALSE}
+BiocManager::install("ggplot2") # if you haven't already installed ggplot2
+library(ggplot2) # v4.0.1
+
+# Colour points by the sample, indicated by `Run`
+pca_plot_run <- ggplot(pca_data, aes(x = PC1, y = PC2, color = Run)) +
+  geom_point(size = 3) +
+  xlab(paste0("PC1: ", percent_var[1], "% variance")) +
+  ylab(paste0("PC2: ", percent_var[2], "% variance")) +
+  theme_bw()
+pca_plot_run # creates the plot in your Rstudio plots pane, or in the R markdown output document
+
+# Colour points by the experimental condition, indicated by `time`
+pca_plot_time <- ggplot(pca_data, aes(x = PC1, y = PC2, color = time)) +
+  geom_point(size = 3) +
+  xlab(paste0("PC1: ", percent_var[1], "% variance")) +
+  ylab(paste0("PC2: ", percent_var[2], "% variance")) +
+  theme_bw()
+pca_plot_time
+```
+
+Save the plots as PDF files
+
+``` {r eval=FALSE}
+ggsave(
+  plot = pca_plot_run, path = figures_dir,
+  filename = "pca_plot_run.pdf",
+  width = 120, height = 90, units = "mm"
+)
+ggsave(
+  plot = pca_plot_time, path = figures_dir,
+  filename = "pca_plot_time.pdf",
+  width = 120, height = 90, units = "mm"
+)
+```
+
+Based on the PCA plots, do you see any samples that are outliers?
+If you do, remove the outlier sample(s), re-run VST, re-run PCA, and re-plot the PCA plots.
+Continue this process iteratively until you are satisfied that no outliers remain.
+
+Example of removing an outlier sample:
+``` {r eval=FALSE}
+# Let's say the outlier sample is "SRRXXX"
+counts_clean <- counts[, !colnames(counts) %in% c("SRRXXX")]
+coldata_clean <- coldata[!coldata$Run %in% c("SRRXXX"), ]
+```
+
+In this case, we won't remove any samples, so can simply set `counts_clean` and `coldata_clean` to the original count matrix and coldata.
+
+``` {r eval=FALSE}
+counts_clean <- counts
+coldata_clean <- coldata
+```
+
+At the end, we will have a 'clean' count matrix and coldata, which we will save as CSV files.
+
+``` {r eval=FALSE}
+write.csv(counts_clean, file.path(dataframes_dir, "clean_counts.csv"))
+write.csv(coldata_clean, file.path(dataframes_dir, "clean_coldata.csv"))
+```
+
+## 4 Normalization
+
+Although as an intermediate step, we already performed normalization of the count matrix,
+we will perform differential expression analysis using EdgeR, which has its own normalization method.
+In the world of RNA-seq analysis, it's good to know how both DESeq2 and EdgeR are widely used, so 
+it's good to know how to use both packages.
+
+- EdgeR manual: https://www.bioconductor.org/packages/devel/bioc/vignettes/edgeR/inst/doc/edgeRUsersGuide.pdf
+- EdgeR normalization paper: Robinson MD, Oshlack A. A scaling normalization method for differential expression analysis of RNA-seq data. Genome Biol. 2010;11(3):R25. doi: 10.1186/gb-2010-11-3-r25. Epub 2010 Mar 2. PMID: 20196867; PMCID: PMC2864565.
+- Recent EdgeR paper: Chen Y, Chen L, Lun ATL, Baldoni PL, Smyth GK. edgeR v4: powerful differential analysis of sequencing data with expanded functionality and improved support for small counts and larger datasets. Nucleic Acids Res. 2025 Jan 11;53(2):gkaf018. doi: 10.1093/nar/gkaf018. PMID: 39844453; PMCID: PMC11754124.
+
+```{r eval=FALSE}
+BiocManager::install("edgeR") # if you haven't already installed edgeR
+library(edgeR) # v4.6.3
+
+dge_list <- DGEList(counts_clean)
+calc <- calcNormFactors(dge_list, method = "TMM")
+counts_norm <- cpm(calc, normalized.lib.sizes = TRUE)
+```
+
+- `calcNormFactors` calculates normalization factors to scale the raw library sizes.
+- `cpm` extracts the normalized counts from the DGEList object.
+
+Try creating a plot to compare the distribution to compare gene counts before and after normalization.
+
+## 5 Non-specific filtering of lowly variable genes
+
+Now that our count matrix has been normalized, we will perform non-specific filtering of lowly variable genes.
+
+To this we will:
+
+1. Calculate the median absolute deviation (MAD) of each gene across all samples.
+2. Determine the MAD threshold for filtering by calculating various percentiles of the MAD distribution.
+3. Identify the genes that pass the MAD threshold.
+
+### 5.1 Calculate the MAD of each gene
+
+Beginning with calculating the MAD of each gene across all samples.
+
+``` {r eval=FALSE}
+# Rather than using a `for` loop, we can use the `apply` function to calculate the
+#   MAD of each gene across all samples.
+# `apply` is conceptually similar to list comprehension or the `map` function in Python.
+
+# The resulting mads are saved as a one-column dataframe.
+mads <- data.frame(mad = apply(X = counts_norm, MARGIN = 1, FUN = mad))
+rownames(mads) <- rownames(counts_norm) # setting the rownames to the gene ids
+
+# Inspect the resulting dataframe
+head(mads)
+```
+
+Now let's identify an appropriate MAD threshold.
+There is no one-size-fits-all threshold for filtering lowly variable genes.
+We will use a data-driven approach to determine the threshold by
+calculating various percentiles of the MAD distribution.
+
+### 5.2 Determine the MAD threshold for filtering
+
+The threshold we pick will be approximately where the MAD values go from 0 to non-zero values.
+
+``` {r eval=FALSE}
+quantile(mads$mad, probs = seq(0, 0.9, 0.01)) # 0th to 90th percentiles
+```
+
+At what percentile do the MAD values go from 0 to non-zero values?
+In this case, it looks like the 49th percentile is a good threshold to use.
+The MAD corresponding to the 49th percentile is 0.0007602902.
+Therefore, we will remove all genes with a MAD < 0.0007602902.
+
+### 5.3 Subset genes to keep based on the MAD threshold
+
+``` {r eval=FALSE}
+filt_threshold <- 0.0007602902
+genes_to_keep <- rownames(mads)[mads$mad >= filt_threshold]
+counts_filt <- counts_norm[genes_to_keep, ]
+```
+
+How many genes remain after filtering?
+
+``` {r eval=FALSE}
+cat("Number of genes before filtering: ", nrow(counts_norm), "\n")
+cat("Number of genes after filtering: ", nrow(counts_filt), "\n")
+```
+
+### 5.4 Save the filtering results
+
+We will save the dataframes as CSV files.
+The variable `genes_to_keep` will be saved as an RDS file, which is a file format that can store R objects.
+
+- RDS files can later be loaded into the R environment using the `readRDS` function.
+
+``` {r eval=FALSE}
+# Save the count matrix as a CSV file
+write.csv(counts_filt, file.path(dataframes_dir, "counts_filt.csv"))
+
+# Save the MAD values as a CSV file
+write.csv(mads, file.path(dataframes_dir, "mads.csv"))
+
+# Save the variables with genes to keep as an RDS file
+saveRDS(genes_to_keep, file.path(rdata_dir, "genes_to_keep.rds"))
+```
+
+## 6 Differential expression analysis
+
+Now that our data is prepared, let's perform differential expression analysis (DEA)!
+
+Setup a folder to store differential expression analysis scripts and results. Enter the new directory.
+
+``` {bash eval=FALSE}
+# Paths assume that your current working directory is the project folder.
+mkdir 6_dea
+cd 6_dea
+```
+
+```
+rnaseq_tutorial
+├── 0_data/
+│   ├── raw_reads/
+│   └── gencode/
+├── 1_qc/
+├── 2_trim/
+├── 3_align/
+├── 4_quantify/
+├── 5_data_prep/
+└── 6_dea/
+```
+
+### 6.1 Setup
+
+Let's load the normalized gene count matrix, coldata, id2name, and list of genes to keep.
+
+Create an R script or R markdown file in the `6_dea` directory.
+Remember to take notes in our scripts about what the script is for, who made the script, when it was created, etc.
+
+``` {r eval=FALSE}
+# Packages -----------------------------------------------
+library(edgeR) # v4.6.3
+library(dplyr) # v1.2.0
+library(tibble) # v3.3.0
+library(ggplot2) # v4.0.1
+
+# Pathways -----------------------------------------------
+## Inputs ===========
+prep_dir <- "5_data_prep"
+dataframes_dir <- file.path(prep_dir, "dataframes")
+counts_path <- file.path(dataframes_dir, "clean_counts.csv")
+id2name_path <- file.path(dataframes_dir, "id2name.csv")
+coldata_path <- file.path(dataframes_dir, "clean_coldata.csv")
+
+rdata_dir <- file.path(prep_dir, "rdata")
+genes_to_keep_path <- file.path(rdata_dir, "genes_to_keep.rds")
+
+## Outputs ===========
+dea_dir <- "6_dea"
+dataframes_dir <- file.path(dea_dir, "dataframes")
+figures_dir <- file.path(dea_dir, "figures")
+rdata_dir <- file.path(dea_dir, "rdata")
+
+# Create the output directories using R instead of unix.
+dir.create(dataframes_dir)
+dir.create(figures_dir)
+dir.create(rdata_dir)
+
+# Load data -----------------------------------------------
+counts <- read.csv(counts_path, row.names = 1)
+coldata <- read.csv(coldata_path, row.names = 1)
+id2name <- read.csv(id2name_path, row.names = 1)
+genes_to_keep <- readRDS(genes_to_keep_path)
+```
+
+In order to perform DEA, we need to ensure that our experimental condition of interest is a `factor` variable.
+We also want to make sure that the reference level of the factor is set to the control condition, which in this case is `dawn`.
+
+``` {r eval=FALSE}
+coldata$time # time before factorization
+coldata$time <- factor(coldata$time, levels = c("dawn", "dusk"))
+coldata$time # time after factorization
+```
+
+### 6.2 Prepare EdgeR objects
+
+We will first create the DGEList object, which is the main data structure used by EdgeR.
+
+``` {r eval=FALSE}
+dge <- dge <- DGEList(counts = counts)
+```
+
+We will then create the design matrix, which specifies the experimental design and the comparisons we want to make.
+
+- A conceptual guide to making design matrices: Law CW, Zeglinski K, Dong X, Alhamdoosh M, Smyth GK, Ritchie ME. A guide to creating design matrices for gene expression experiments. F1000Res. 2020 Dec 10;9:1444. doi: 10.12688/f1000research.27893.1. PMID: 33604029; PMCID: PMC7873980.
+- Corresponding R vignette: https://www.bioconductor.org/packages//release/workflows/vignettes/RNAseq123/inst/doc/designmatrices.html
+
+``` {r eval=FALSE}
+design <- model.matrix(~ time, data = coldata)
+head(design) # inspect the design matrix
+```
+
+- The formula `~ time` means that we will be contrasting dusk vs dawn, which are factors in the `time` column of the coldata dataframe.
+- In the design matrix, each row is a sample.
+- The first column of the design matrix is the y-intercept, which represents the baseline expression level of the control condition (dawn).
+- The second column of the design matrix is the coefficient for the experimental condition (dusk), which represents the difference between dawn and dusk.
+
+Save the design
+
+``` {r eval=FALSE}
+write.csv(design, file.path(dataframes_dir, "design.csv"))
+```
+
+### 6.3 EdgeR workflow
+
+Starting with the DGEList that contains raw counts, we need to re-calculate normalization size factors.
+
+``` {r eval=FALSE}
+dge <- calcNormFactors(dge, method = "TMM")
+```
+
+Then estimate dispersion, which is a measure of the variability of gene expression across samples.
+We perform this step because RNA-seq data has a statistical property called overdispersion, which means
+that the variance of gene expression is greater than the mean.
+We need to minimize this dispersion.
+
+``` {r eval=FALSE}
+dge <- estimateDisp(dge, design)
+```
+
+Filter out lowly variable genes using the list of genes to keep that we generated in part 5 of this tutorial.
+
+``` {r eval=FALSE}
+dge_filt <- dge[genes_to_keep, , ]
+```
+
+Fit the negative binomial generalized log-linear model to the filtered DGEList object.
+
+``` {r eval=FALSE}
+fit <- glmQLFit(dge_filt, design)
+```
+
+Perform the quasi-likelihood F-test to test for differential expression between the two conditions.
+
+``` {r eval=FALSE}
+qlf <- glmQLFTest(fit, coef = "timedusk")
+```
+
+### 6.4. Extract the results
+
+We will get the results using edgeR's `topTags` function.
+
+``` {r eval=FALSE}
+results <- topTags(qlf, n = Inf, adjust.method = "BH", sort.by = "PValue")
+results_df <- results$table
+```
+
+- `n = Inf`: means that we want to get all the results, not just the top N genes.
+- `adjust.method = "BH"`: adjusting the P-values using the Benjamini-Hochberg (BH) method.
+- `results$table`: contains the results as a data frame.
+
+Merge the results with the id2name dataframe.
+
+``` {r eval=FALSE}
+results_id2name <- results_df |>
+  tibble::rownames_to_column(var = "gene_name") |>
+  dplyr::left_join(id2name, by = "gene_name")
+```
+
+- `tibble::rownames_to_column`: converts the rownames of the results dataframe to a column called `gene_name`.
+- `dplyr::left_join`: merges the results dataframe with the id2name dataframe by the `gene_name` column.
+
+How many genes are differentially expressed?
+
+``` {r eval=FALSE}
+sig_results <- results_id2name |>
+  dplyr::filter(FDR < 0.05)
+cat("\nNumber of genes tested: ", nrow(results_df), "\n")
+cat("\nNumber of significant genes (FDR < 0.05): ", nrow(sig_results), "\n")
+```
+
+Save the results
+
+``` {r eval=FALSE}
+write.csv(results_id2name, file.path(dataframes_dir, "all_results.csv"))
+write.csv(sig_results, file.path(dataframes_dir, "sig_results.csv"))
+```
+
+### 6.5 Plot the results
+
+We will be visualizing the results using a volcano plot.
+A volcano plot is a scatter plot that shows the relationship between the fold change and the statistical significance of each gene.
+We will use the `ggplot2` package to create the volcano plot.
+
+Add a column to the results dataframe that indicates whether each gene is significantly differentially expressed.
+
+``` {r eval=FALSE}
+plot_data <- results_id2name |>
+  dplyr::mutate(significance = ifelse(FDR < 0.05, "Significant", "Not Significant"))
+```
+
+Get the BH signfiicance threshold
+
+``` {r eval=FALSE}
+bh_threshold <- max(sig_results$PValue)
+```
+
+Create the plot
+
+``` {r eval=FALSE}
+volcano_plot <- plot_data |>
+  ggplot(aes(x = logFC, y = -log10(PValue), colour = significance)) +
+  geom_point(alpha = 0.5) +
+  scale_colour_manual(
+    name = "Significance",
+    values = c("Significant" = "red", "Not Significant" = "black")
+  ) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  geom_hline(yintercept = -log10(bh_threshold), linetype = "dotdash") +
+  xlab("Log2 Fold Change") +
+  ylab("-Log10 P-Value") +
+  theme_bw()
+volcano_plot
+```
+
+- `aes`: specifies the aesthetics of the plot, including the x and y axes and the color of the points.
+- `geom_point`: creates the scatter plot.
+- `scale_colour_manual`: sets the colors for the points based on significance.
+- `geom_hline`: adds horizontal lines to indicate the significance thresholds.
+- `xlab` and `ylab`: set the axis labels.
+- `theme_bw`: applies a clean, white background theme to the plot.
+
+
+Save the plot as a PNG file
+
+``` {r eval=FALSE}
+ggsave(
+  plot = volcano_plot, path = figures_dir,
+  filename = "volcano_plot.png",
+  width = 180, height = 180, units = "mm"
+)
+```
+
+### 6.6 Save the environment
+
+We will save the R environment as an RData file, so we never have to run this testing again.
+
+``` {r eval=FALSE}
+save.image(file.path(rdata_dir, "dea.RData"))
+```
+
+
+## 7 Enrichment analysis
+
+In the case of many signficant results, we can perform enrichment analysis to aid interpretation of results.
+
+For this tutorial, we will use the `gprofiler2` package to perform enrichment analysis of the significant genes.
+
+- The web-verison of g:Profiler can be found here: https://biit.cs.ut.ee/gprofiler/gost
+- gprofiler2 vignette: https://cran.r-project.org/web/packages/gprofiler2/vignettes/gprofiler2.html
+- gprofiler2 paper: Kolberg L, Raudvere U, Kuzmin I, Vilo J, Peterson H. gprofiler2 -- an R package for gene list functional enrichment analysis and namespace conversion toolset g:Profiler. F1000Res. 2020 Jul 15;9:ELIXIR-709. doi: 10.12688/f1000research.24956.2. PMID: 33564394; PMCID: PMC7859841.
+
+Setup a folder to store enrichment analysis scripts and results. Enter the new directory.
+
+``` {bash eval=FALSE}
+# Paths assume that your current working directory is the project folder.
+mkdir 7_enrichment
+cd 7_enrichment
+```
+
+```
+rnaseq_tutorial
+├── 0_data/
+│   ├── raw_reads/
+│   └── gencode/
+├── 1_qc/
+├── 2_trim/
+├── 3_align/
+├── 4_quantify/
+├── 5_data_prep/
+├── 6_dea/
+└── 7_enrichment/
+```
+
+### 7.1 Setup
+
+Create an R script or R markdown file in the `7_enrichment` directory.
+Remember to take notes in our scripts about what the script is for, who made the script, when it was created, etc.
+
+Install the `gprofiler2` package if you haven't already.
+
+``` {r eval=FALSE}
+install.packages("gprofiler2")
+library(gprofiler2) # 0.2.4
+```
+
+We will also be using `ggplot2` to visualize the enrichment results.
+
+``` {r eval=FALSE}
+library(ggplot2) # v4.0.1
+```
+
+Let's load the DEA results and create the output directories
+
+``` {r eval=FALSE}
+# Pathways -----------------------------------------------
+## Input ===========
+dea_dir <- "6_dea"
+sig_results_path <- file.path(dea_dir, "dataframes", "sig_results.csv")
+
+## Output ===========
+enrich_dir <- "7_enrichment"
+dataframes_dir <- file.path(enrich_dir, "dataframes")
+figures_dir <- file.path(enrich_dir, "figures")
+rdata_dir <- file.path(enrich_dir, "rdata")
+
+dir.create(dataframes_dir)
+dir.create(figures_dir)
+dir.create(rdata_dir)
+
+# Load data -----------------------------------------------
+dea_res <- read.csv(sig_results_path, row.names = 1)
+head(dea_res)
+```
+
+### 7.2 Perform enrichment analysis
+
+We will perform enrichment analysis using the `gost` function from the `gprofiler2` package.
+
+``` {r eval=FALSE}
+gost_res <- gost(
+  query = dea_res$gene_name,
+  organism = "mmusculus",
+  correction_method = "g_SCS",
+  domain_scope = "annotated"
+)
+```
+
+- The results list are stored in the gost_res variable.
+- WThe g_SCS multiple testing correction method is a method developed by the creators of G:Profiler to account for many pathways being related to one another.
+- The domain_scope = "annotated" argument means that only genes that are annotated to at least one pathway will be considered in the background set for this analysis. This limits the artiicial significance of results.
+
+Let's also get the URL link to view the results in the g:Profiler web interface.
+
+``` {r eval=FALSE}
+gost_link <- gost(
+  query = dea_res$gene_name,
+  organism = "mmusculus",
+  correction_method = "g_SCS",
+  domain_scope = "annotated",
+  as_short_link = TRUE
+)
+```
+
+Get the results dataframe from the gost_res object.
+
+``` {r eval=FALSE}
+gost_df <- gost_res$result
+res_df_chr <- apply(gost_df, 2, as.character) # convert all columns to character type, so we can save the dataframe
+```
+
+Save the results
+
+``` {r eval=FALSE}
+saveRDS(gost_res, file.path(rdata_dir, "gost_res.rds"))
+write.csv(res_df_chr, file.path(dataframes_dir, "gost_results.csv"))
+write.table(gost_link, file.path(dataframes_dir, "gost_link.txt"), row.names = FALSE, col.names = FALSE)
+```
+
+Plot the results as a bubble plot
+
+``` {r eval=FALSE}
+bubble_plot <- gost_df |>
+  # subset(term_size > 100 & term_size < 500) |> # optionally subset by term size
+  head(n = 10) |> #E get the top 10 results
+  ggplot(aes(x = intersection_size / term_size, y = term_name)) +
+  geom_point(aes(size = intersection_size, colour = -log10(p_value))) +
+  xlab("overlap / term size") +
+  ylab("term") +
+  scale_colour_continuous(name = "-log10(adj. p)") +
+  scale_size_continuous(name = "overlap") +
+  theme_bw()
+bubble_plot
+```
+
+- Although not always necessary, we can subset the results to only include terms/pathways of moderate size,
+so that we exclude terms that are either too specific or too broad.
+
+Save the plot as a PDF
+
+``` {r eval=FALSE}
+ggsave(
+  plot = bubble_plot,
+  path = figures_dir,
+  filename = "bubble_plot.pdf",
+  width = 90,
+  height = 90,
+  units = "mm"
+)
+```
+
+Save the R environment
+
+``` {r eval=FALSE}
+save.image(file.path(rdata_dir, "enrichment.RData"))
+```

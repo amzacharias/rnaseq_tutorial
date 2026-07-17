@@ -1,0 +1,8 @@
+Job started at 17:22:02
+Running FastQC on /global/teaching-home/sa3240015/rnaseq_tutorial/1_qc/../0_data/raw_reads/SRR11902288_1.fastq.gz
+application/gzip
+Analysis complete for SRR11902288_1.fastq.gz
+Running FastQC on /global/teaching-home/sa3240015/rnaseq_tutorial/1_qc/../0_data/raw_reads/SRR11902288_2.fastq.gz
+application/gzip
+Analysis complete for SRR11902288_2.fastq.gz
+Job ended at 17:22:35

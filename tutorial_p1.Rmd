@@ -1,0 +1,749 @@
+---
+title: "Transcriptomics Tutorial - Raw sequencing reads to count matrix"
+output:
+  word_document:
+    toc: false
+  html_document:
+    theme: readable
+    highlight: default
+    toc: false
+    toc_float: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Part 1: Raw sequencing reads to count matrix
+
+In this part of this tutorial, we will perform quality checking, trimming, 
+alignment, and quantification of one sample of RNA-seq data.
+
+Sample "SRR11902288" is an mRNA-seq sample from the cerebral cortex of a naive/healthy male mouse, 
+during dawn, which is the transition between night and daytime.
+
+- Gene Expression Omnibus (GEO) link to the dataset: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE151567
+- Published in: Zacharias AM, O'Connor CD, Topouza DG, Fang ZY, Ghazinejad H, Chen H, Duan Q, Ghasemlou N. Site- and cell-type-specific miRNA and mRNA genes and networks across the cortex, striatum, and hypothalamus. Commun Biol. 2025 Jul 1;8(1):969. doi: 10.1038/s42003-025-08371-7. PMID: 40594985; PMCID: PMC12218356.
+
+Given time constraints, we will only process this one sample.
+The FastQC files have also been randomly subset to only contain 1 million reads, instead of 50 million reads.
+The same steps can be applied to all samples in a dataset. Specifically, we will:
+
+1. Perform quality control of raw sequencing reads using FastQC and MultiQC.
+2. Trim low-quality bases and adapter sequences using fastp.
+3. Align trimmed reads to the mouse reference genome using Hisat2.
+4. Quantify gene expression using StringTie.
+
+> NOTE: Refrain from copying and pasting code because it can introduce hidden characters and formatting errors.
+> Remember at each step to check the .out and .err files before moving on to the next step.
+
+## 1. Setup
+
+### 1.1 Project folder setup
+
+Make a directory called `rnaseq_tutorial` and change into it.
+
+``` {bash eval=FALSE}
+# "~" is equivalent to `/global/teaching-home/<your_username>`
+mkdir ~/rnaseq_tutorial
+cd ~/rnaseq_tutorial
+```
+
+Use `scp` to securly copy the tutorial files from the course directory to your project folder.
+
+``` {bash eval=FALSE}
+# "~" is equivalent to `/global/teaching-home/<your_username>`
+scp -r /global/teaching-project/sg3240000/rnaseq_tutorial/* .
+```
+
+Check that the files have been successfully copied.
+
+``` {bash eval=FALSE}
+cd ~/rnaseq_tutorial
+ls
+```
+
+You should see the following directory called `0_data` was added to your working directory.
+This folder contains the raw sequencing reads in FASTQ format, stored in a directory called `raw_reads`.
+This folder also contains the reference genome and annotation files, stored in a directory called `gencode`.
+
+```
+rnaseq_tutorial
+├── 0_data/
+│   ├── raw_reads/
+│   │   ├── SRR11902288_1.fastq.gz
+│   │   └── SRR11902288_2.fastq.gz
+│   ├── gencode/
+│   │   ├── gencode.vM32.primary_assembly.annotation.gtf
+│   │   └── GRCm39.primary_assembly.genome.fa
+│   └── coldata.csv # used for tutorial p2.
+|   └── counts.csv  # used for tutorial p2.
+│   └── id2name.csv # used for tutorial p2.
+```
+
+### 1.2 Inspect the FASTQ files
+
+Use `zless` inspect the contents of these FASTQ files (https://en.wikipedia.org/wiki/FASTQ_format).
+`zless` Allows you to interactively scroll up and down a compressed file. To exit, press `q` on your keyboard.
+
+``` {bash eval=FALSE}
+zless 0_data/raw_reads/SRR11902288_2.fastq.gz
+q
+zless 0_data/raw_reads/SRR11902288_1.fastq.gz
+q
+```
+
+### 1.3 Submitting jobs to the SLURM scheduler
+
+In this section, we will prepare a template bash script for submitting jobs to the CAC, 
+and remind you how to submit a job. For more info see: 
+https://jstaf.github.io/hpc-intro/scheduler/ and https://slurm.schedmd.com/documentation.html
+
+``` {bash eval=FALSE}
+#!/bin/bash
+#SBATCH --job-name=job_name
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=YourEmail
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=10MB
+#SBATCH --time=0-0:10:00  # Day-Hours-Minutes-Seconds
+#SBATCH --output=job_name.out
+#SBATCH --error=job_name.err
+# Title: Example bash script
+# Author: <Your name>
+# Date: <Date>
+# Email: <Your email>
+# Notes:
+#
+
+echo Job started at "$(date +%T)"
+
+<Your Job Goes here>
+
+echo Job ended at "$(date +%T)"
+```
+
+Submit your job.
+
+``` {bash eval=FALSE}
+sbatch example.sh
+```
+
+To check status of job(s) submitted:
+
+``` {bash eval=FALSE}
+squeue -u <your username>
+# or
+watch squeue -u <your username>
+```
+
+To cancel a job:
+
+``` {bash eval=FALSE}
+scancel <job id number>
+# or
+scancel -n <job name>
+# or
+scancel -u <your username> # use with caution!
+```
+
+### 1.4 Parallelization within a script
+
+In this tutorial and in this assignment you will have to process multiple files in the same way.
+To do this efficiently, you could create a bash script for each file and submit multiple jobs at the same time.
+In this tutorial, we will create a function that processes a single file, and apply it to all files with parallelization.
+
+- Parallel documentation: https://linux.die.net/man/1/parallel
+
+Example of a bash script with parallelization:
+
+```
+#!/bin/bash
+#SBATCH --job-name=job_name
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=YourEmail
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=10MB
+#SBATCH --time=0-0:10:00  # Day-Hours-Minutes-Seconds
+#SBATCH --output=job_name.out
+#SBATCH --error=job_name.err
+# Title: Example bash script
+# Author: <Your name>
+# Date: <Date>
+# Email: <Your email>
+# Notes:
+#
+
+echo Job started at "$(date +%T)"
+
+# Dependencies
+
+# Commands to run your analysis
+# Function
+echo_text() {
+    echo "Hello $1"
+}
+
+# Execute
+export -f echo_text
+parallel --jobs 2 echo_text ::: Alice Bob Charlie
+
+echo Job ended at "$(date +%T)"
+```
+
+Submit your job.
+
+``` {bash eval=FALSE}
+sbatch example.sh
+```
+
+## 2 Quality control of raw sequencing reads
+
+Before we can analyze the sequencing reads, we have to check their quality and potentially clean them.
+
+FastQC is a quality control tool that generates a report for each FASTQ file. 
+MultiQC aggregates the FastQC reports into a single report.
+From the FastQC and MultiQC reports, we can see whether cleaning of reads is necessary.
+In this case, we will use fastp to trim low-quality bases and adapter sequences from the reads.
+Although not in this tutorial, we would also typically run FastQC and MultiQC on the trimmed reads.
+
+Setup a folder to store quality control scripts and results. Enter the new directory.
+
+``` {bash eval=FALSE}
+# Paths assume that your current working directory is the project folder.
+mkdir 1_qc
+cd 1_qc
+```
+
+```
+rnaseq_tutorial
+├── 0_data/
+│   ├── raw_reads/
+│   ├── gencode/
+└── 1_qc/
+```
+
+### 2.1 Run FastQC
+
+The following script will run FastQC on all FASTQ files in the `0_data/raw_reads` directory, 
+and then run MultiQC to generate a single report. Specifically, the script will:
+
+1. Create a directory called `fastqc_reports` to store the FastQC reports.
+2. Load the FastQC module.
+3. Run FastQC on all FASTQ files in the `0_data/raw_reads` directory with parallelization.
+
+- FastQC documentation: https://www.bioinformatics.babraham.ac.uk/projects/fastqc/
+
+Insert the following into a bash script, replacing `<Your Job Goes here>`.
+
+``` {bash eval=FALSE}
+# Dependencies
+module load StdEnv/2023 fastqc/0.12.1
+
+# Variables
+READSPATH=../0_data/raw_reads # path to the directory containing the raw FASTQ files
+OUTDIR=./fastqc_out  # path to the output directory where FastQC reports will be saved
+mkdir -p "$OUTDIR"        # create the output directory if it does not already exist
+MAX_JOBS=2                # maximum number of parallel processes
+
+# Function
+run_fastqc() {
+    file="$1"
+    echo "Running FastQC on $file"
+    fastqc -o "$OUTDIR" "$file"
+}
+
+# Execute
+export -f run_fastqc
+export OUTDIR
+
+find "$READSPATH" -name "*.fastq.gz" | \
+    parallel --jobs "$MAX_JOBS" run_fastqc {}
+```
+
+Recommended 2 CPUS, 1GB of memory, and 10 minutes of time.
+
+Notes:
+
+- `mkdir -p "$OUTDIR"`: creates the output directory if it does not already exist.
+- `READSPATH`: path to the directory containing the raw FASTQ files.
+- `OUTDIR`: path to the output directory where FastQC reports will be saved. `mkdir -p` creates it if it does not already exist.
+- `MAX_JOBS`: the number of FastQC processes to run at the same time. Set to match `--cpus-per-task`.
+- `run_fastqc()`: a Bash function that runs FastQC on a single file passed as `$1`.
+- `export -f run_fastqc`: makes the function available to the subshells that `parallel` spawns. Without this, parallel workers would not recognize `run_fastqc` as a command. `-f` specifies that the name refers to a function, not a variable.
+- `export OUTDIR`: makes the `OUTDIR` variable available inside each worker subshell so `run_fastqc` can use it.
+- `find "$READSPATH" -name "*.fastq.gz"`: generates the list of input files to process.
+- `| parallel --jobs "$MAX_JOBS" run_fastqc {}`: pipes each file path to `parallel`, which calls `run_fastqc` with that path (`{}`) as the argument, running up to `MAX_JOBS` calls concurrently.  
+- `\`: backslash at the end of a line allows the command to continue on the next line for readability. Make sure there are no spaces or text after the `\`.
+
+### 2.2 Run MultiQC
+
+MultiQC aggregates the FastQC reports into a single report.
+
+- MultiQC documentation: https://docs.seqera.io/multiqc/
+- MultiQC paper: Ewels P, Magnusson M, Lundin S, Käller M. MultiQC: summarize analysis results for multiple tools and samples in a single report. Bioinformatics. 2016 Oct 1;32(19):3047-8. doi: 10.1093/bioinformatics/btw354. Epub 2016 Jun 16. PMID: 27312411; PMCID: PMC5039924.
+
+#### 2.2.1 Install MultiQC
+
+MultiQC is built in python and can be installed using pip in a virtual environment.
+Conda also works, but is not supported by the CAC.
+
+Set your working directory to the project folder & run the following code in your terminal.
+
+``` {bash eval=FALSE}
+module load StdEnv/2020 python/3.9.6
+mkdir -p env
+python3 -m venv env/multiqc_env     # create the virtual environment
+source env/multiqc_env/bin/activate # activate the virtual environment
+pip install "multiqc==1.14"         # takes approx 3 minutes to install
+deactivate                          # deactivate the virtual environment
+```
+
+#### 2.2.2 Run MultiQC
+
+Navigate back to the `1_qc` directory and create a bash script to run MultiQC.
+
+``` {bash eval=FALSE}
+# Dependencies
+module load StdEnv/2023 python/3.9.6
+source ../env/multiqc_env/bin/activate # activate the virtual environment w/ multiqc
+
+# Execute multiqc
+multiqc \
+    --outdir multiqc_out \
+    --cl-config "fastqc_config: { fastqc_theoretical_gc: mm10_txome }" \
+    fastqc_out
+deactivate
+```
+
+Recommended 1 CPU, 20 MB, and 10 minutes of time.
+
+Notes:
+
+- `--outdir`: path to the output directory where the MultiQC report will be saved.
+- `--cl-config`: the theoretical GC content of the mouse transcriptome (mm10_txome).
+- `fastqc_out`: path to the directory containing the FastQC reports.
+
+#### 2.2.3 Inspect the MultiQC report
+
+Open the multiqc_report.html file in your browser to inspect the MultiQC report.
+
+## 3. Trim low-quality bases and adapter sequences
+
+Fastp is a tool that trims low-quality bases and adapter sequences from raw sequencing reads.
+
+- Fastp documentation: https://github.com/opengene/fastp
+- Fastp paper: Chen S. fastp 1.0: An ultra-fast all-round tool for FASTQ data quality control and preprocessing. Imeta. 2025 Sep 9;4(5):e70078. doi: 10.1002/imt2.70078. PMID: 41112039; PMCID: PMC12527978.
+
+Setup a folder to store trimming scripts and results. Enter the new directory.
+
+``` {bash eval=FALSE}
+# Paths assume that your current working directory is the project folder.
+mkdir 2_trim
+cd 2_trim
+```
+
+```
+rnaseq_tutorial
+├── 0_data/
+│   ├── raw_reads/
+│   └── gencode/
+├── 1_qc/
+└── 2_trim/
+```
+
+### 3.1 Run fastp
+
+``` {bash eval=FALSE}
+# Dependencies
+module load StdEnv/2023 fastp/1.0.1
+
+# Variables
+READSPATH=../0_data/raw_reads # path to the directory containing the raw FASTQ files
+TRIMREADSDIR=./trimmed_reads  # path to the output directory w/ trimmed FASTQ files
+REPORTSDIR=./fastp_reports    # path to the directory w/ fastp reports
+mkdir -p "$TRIMREADSDIR" "$REPORTSDIR"
+MAX_JOBS=2
+
+# Function
+run_fastp() {
+    file="$1"
+    base=$(basename "$file" _1.fastq.gz)
+    echo "Running Fastp on $file"
+    fastp \
+        -q 20 \
+        -l 30 \
+        -i "$file" \
+        -I "${READSPATH}/${base}_2.fastq.gz" \
+        -o "${TRIMREADSDIR}/${base}_1.trim.fastq.gz" \
+        -O "${TRIMREADSDIR}/${base}_2.trim.fastq.gz" \
+        -h "${REPORTSDIR}/${base}_fastp.html" \
+        -j "${REPORTSDIR}/${base}_fastp.json"
+}
+
+# Execute
+export -f run_fastp
+export READSPATH TRIMREADSDIR REPORTSDIR
+
+find "$READSPATH" -name "*_1.fastq.gz" | \
+    parallel --jobs "$MAX_JOBS" run_fastp {}
+```
+
+Recommended 2 CPUS, 7GB, 10 minutes of time.
+
+Notes:
+
+- `base=$(basename "$file" _1.fastq.gz)` extracts the sample name from the input file path, removing the `_1.fastq.gz` suffix.
+- `-q`: phred quality score threshold for trimming low-quality bases.
+- `-l`: minimum length of reads to keep after trimming.
+- `-i`: path to the input FASTQ file for read 1.
+- `-I`: path to the input FASTQ file for read 2.
+- `-o`: path to the output FASTQ file for trimmed read 1.
+- `-O`: path to the output FASTQ file for trimmed read 2.
+- `-h`: path to the HTML report file.
+- `-j`: path to the JSON report file.
+
+Check out the fastp report to inspect the results of trimming. 
+Optionally you could re-run FastQC and MultiQC on the trimmed reads.
+
+If any samples were to continue having low quality reads, we would remove that samples from analysis.
+
+## 4. Alignment
+
+Once sequencing reads are cleaned and high quality, we can align them to the reference genome. 
+In this tutorial, we will use Hisat2 to align the reads to the mouse reference genome.
+
+- Hisat2 manual: https://daehwankimlab.github.io/hisat2/manual/
+- Hisat2 paper: Kim D, Paggi JM, Park C, Bennett C, Salzberg SL. Graph-based genome alignment and genotyping with HISAT2 and HISAT-genotype. Nat Biotechnol. 2019 Aug;37(8):907-915. doi: 10.1038/s41587-019-0201-4. Epub 2019 Aug 2. PMID: 31375807; PMCID: PMC7605509.
+
+Setup a folder to store alignment scripts and results. Enter the new directory.
+
+``` {bash eval=FALSE}
+# Paths assume that your current working directory is the project folder.
+mkdir 3_align
+cd 3_align
+```
+
+```
+rnaseq_tutorial
+├── 0_data/
+│   ├── raw_reads/
+│   └── gencode/
+├── 1_qc/
+├── 2_trim/
+└── 3_align/
+```
+
+## 4.1 Build Hisat2 index
+
+We will align the sequencing reads to the mouse genome (DNA sequence) and annotation files 
+from the GENCODE project (https://www.gencodegenes.org/mouse/).
+Before we can do this, we need to **index** the reference genome, so that Hisat2 can efficiently search it 
+for matches to the sequencing reads.
+
+``` {bash eval=FALSE}
+# Dependencies
+module load StdEnv/2023 hisat2/2.2.1
+
+# Variables
+GENOMEDIR=../0_data/gencode # path to the reference genome files
+INDEXDIR=./hisat2_index     # path to the output directory within the 3 _align dir
+mkdir -p "$INDEXDIR"        # create the output directory if it does not already exist
+
+# Body
+echo "Extracting splice sites and exons from the GTF file..."
+hisat2_extract_splice_sites.py ${GENOMEDIR}/gencode.vM32.primary_assembly.annotation.gtf > ${INDEXDIR}/GRCm39.ss
+hisat2_extract_exons.py ${GENOMEDIR}/gencode.vM32.primary_assembly.annotation.gtf > ${INDEXDIR}/GRCm39.exon
+
+echo "Building Hisat2 index..."
+hisat2-build \
+    -p 20 \
+    -f ${GENOMEDIR}/GRCm39.primary_assembly.genome.fa \
+    --ss ${INDEXDIR}/GRCm39.ss \
+    --exon ${INDEXDIR}/GRCm39.exon \
+    ${INDEXDIR}/GRCm39_index
+```
+
+Recommended 10 CPUS, 150 GB, and 2 hours of time. It will probably take more like an hour, but we're requesting more time in case.
+
+- `-p`: number of threads to use for indexing. Set to match `--cpus-per-task` for the SLURM scheduler.
+- `-f`: path to the input genome FASTA file.
+- `--ss`: path to the splice site file generated from the GTF annotation file.
+- `--exon`: path to the exon file generated from the GTF annotation file.
+- `INDEXDIR`: path to the output directory for the Hisat2 index.
+
+## 4.2 Align reads with Hisat2
+
+Now that the reference genome is indexed, we can align the trimmed reads to it using Hisat2.
+There's just one sample in this tutorial, so no paralleization is needed.
+
+``` {bash eval=FALSE}
+# Dependencies
+module load StdEnv/2023 hisat2/2.2.1
+
+# Variables
+SAMDIR=./hisat2_sam        # path to the output directory with SAM files
+REPORTDIR=./hisat2_reports # path to the output directory with Hisat2 reports
+mkdir -p "$SAMDIR" "$REPORTDIR"
+
+# Alignment
+hisat2 -p 24 \
+    -x "./hisat2_index/GRCm39_index" \
+    -1 "../2_trim/trimmed_reads/SRR11902288_1.trim.fastq.gz" \
+    -2 "../2_trim/trimmed_reads/SRR11902288_2.trim.fastq.gz" \
+    --dta \
+    --time \
+    --verbose \
+    --summary-file "${REPORTDIR}/SRR11902288_summary.txt" \
+    -S "${SAMDIR}/SRR11902288.sam"
+```
+
+Recommended 24 CPUS, 10 GB, and 10 minutes of time.
+
+Notes:
+
+- `-p`: number of threads to use for alignment. Set to match `--cpus-per-task` for the SLURM scheduler.
+- `-x`: path to the Hisat2 index prefix.
+- `-1`: path to the input FASTQ file for read 1.
+- `-2`: path to the input FASTQ file for read 2.
+- `--dta`: stands for `downstream-transcriptome-assembly`. Tailors alignments for transcript assemblers like StringTie by requiring longer anchor lengths for de novo discovery of splice sites.
+- `--time`: print the time to load the index files and align the reads.
+- `--verbose`: print verbose output, useful for debugging.
+- `--summary-file`: path to the output summary file with alignment statistics.
+- `-S`: path to the output SAM file with aligned reads.
+
+There is no strict threshold, but if any sample has a clearly low alignment rate  compared to the 
+other samples, we would remove that sample from downstream processing and analysis.
+A good default threshold may be an 80% unique and overall alignment rate, but can certainly vary across studies.
+
+## 4.3 Convert SAM to BAM, sort, and mark duplicates
+
+After aligning the reads, we need to convert the SAM file to a BAM file, sort it, and mark duplicates.
+We convert the files from SAM to BAM so that they take up less space and can be processed more efficiently.
+We sort the BAM file by genomic coordinates so it can be analyzed more efficiently by downstream tools.
+Finally, we mark duplicate reads that may have been introduced during PCR amplification. 
+This doesn't affect quantification, but could be important if we ever want to call variants in these data.
+
+- Samtools manual: http://www.htslib.org/doc/samtools.html 
+- Samtools duplicate marking documentation: http://www.htslib.org/algorithms/duplicate.html
+
+``` {bash eval=FALSE}
+# Dependencies
+module load StdEnv/2023 samtools/1.18
+
+# Variables
+SAMDIR=./hisat2_sam
+BAMDIR=./hisat2_bam
+mkdir -p "$BAMDIR"
+
+# Code
+samtools view -@ 4 -b "${SAMDIR}/SRR11902288.sam" | \
+    samtools collate -@ 4 -u -O - | \
+    samtools fixmate -@ 2 -m -u - - | \
+    samtools sort -@ 12 -l 0 - | \
+    samtools markdup -@ 2 - "${BAMDIR}/SRR11902288.sort.markdup.bam"
+samtools index "${BAMDIR}/SRR11902288.sort.markdup.bam"
+```
+
+Recommended 24 CPUS, 10 GB, and 20 minutes of time.
+
+Notes:
+
+- You can play around with the number of threads for each command if you want.
+- `|` pipes the output of one command to the input of the next command, without having to create intermediate variables.
+- `samtools view -@ 4 -b`: converts the SAM file to BAM format using 4 threads.
+    - `-b`: output BAM format.
+- `samtools collate -@ 4 -u -O -`: groups reads by name
+    - `-u`: output uncompressed BAM.
+    - `-O`: output to the `stdout`, which is the standard output environment. Allows the output to be piped.
+- `samtools fixmate -@ 2 -m -u - -`: fixes read mate information using 2 threads. Mates are reads that correspond to each other in paired-end sequencing.
+    - `-u`: output uncompressed BAM.
+    - `-m`: adds a score for the alignment quality of both mates in a read pair.
+- `samtools sort -@ 12 -l 0 -`: sorts the BAM file by genomic coordinates using 12 threads.
+    - `-l 0`: output uncompressed BAM.
+- `samtools markdup -@ 2 -`: marks duplicate reads using 2 threads.
+- `samtools index`: creates an index file for the sorted BAM file, which speeds up downstream analysis.
+
+Now that your BAM files have been created, you could remove the SAM files to save space.
+
+## 5. Quantification
+
+Now that reads are aligned to the reference genome, we can quantify gene expression using StringTie.
+First, StringTie is first run on each sample to estimate transcript abundances, resulting in a GTF file for each sample.
+Then, we combine all GTFs into a single count matrix using the `tximport` R package.
+
+- StringTie manual: https://ccb.jhu.edu/software/stringtie/index.shtml?t=manual
+- StringTie paper: Pertea M, Pertea GM, Antonescu CM, Chang TC, Mendell JT, Salzberg SL. StringTie enables improved reconstruction of a transcriptome from RNA-seq reads. Nat Biotechnol. 2015 Mar;33(3):290-5. doi: 10.1038/nbt.3122. Epub 2015 Feb 18. PMID: 25690850; PMCID: PMC4643835.
+
+For this tutorial, we only 1) quantify gene expression and 2) combine counts across samples.
+As you will see in the StringTie manual, quantification with StringTie is usually a four-step process.
+
+1. Assemble transcripts (known and novel).
+2. Merge transcript assemblies from all samples into a single GTF file.
+3. Re-estimate transcript abundances using the merged GTF file.
+4. Combine counts across samples into a single count matrix.
+
+The tutorial is skipping the transcript assembly and merging steps; however, 
+you **will** need to do these steps in the assignment.
+It will be up to you to figure out exactly how to do this by looking at the
+StringTie manual and/or online resources.
+
+Setup a folder to store quantification scripts and results. Enter the new directory.
+
+``` {bash eval=FALSE}
+# Paths assume that your current working directory is the project folder.
+mkdir 4_quantify
+cd 4_quantify
+```
+
+```
+rnaseq_tutorial
+├── 0_data/
+│   ├── raw_reads/
+│   └── gencode/
+├── 1_qc/
+├── 2_trim/
+├── 3_align/
+└── 4_quantify/
+```
+
+### 5.1 Run StringTie
+
+StringTie results in a GTF with the transcript abundance results.
+In this tutorial, StringTie is only run once because there is only one sample. 
+In practice, StringTie would be run for each sample in the dataset.
+
+``` {bash eval=FALSE}
+# Dependencies
+module load StdEnv/2023 stringtie/3.0.1
+# Variables
+GTFDIR=./gtfs
+mkdir -p ${GTFDIR}/SRR11902288
+
+# Body
+stringtie -p 12 \
+    -G ../0_data/gencode/gencode.vM32.primary_assembly.annotation.gtf \
+    -e \
+    -B \
+    -o ${GTFDIR}/SRR11902288/SRR11902288.gtf \
+    ../3_align/hisat2_bam/SRR11902288.sort.markdup.bam
+```
+
+Recomended 12 CPUS, 600 MB, and 10 minutes of time.
+
+Notes:
+
+- `-p`: number of threads to use for quantification.
+- `-G`: path to the GTF annotation file.
+- `-e`: only estimate the abundance of the given reference transcripts, without assembling novel transcripts.
+- `-B`: outputs additional quantified feature count files.
+- `-o`: path to the output GTF file with transcript abundance results.
+
+Look at the first 10 lines of the GTF file to inspect the results.
+
+```{bash eval=FALSE}
+head gtfs/SRR11902288/SRR11902288.gtf
+```
+
+### 5.2 Combine counts across samples
+
+We will combine the gene counts across samples into a single count matrix using the R package tximport.
+
+Your working directory for Rscripts should be the project folder (`rnaseq_tutorial`).
+
+In **R**, create a folder to store the count matrix and gene ID to gene name mapping files.
+
+```{r eval=FALSE}
+dir.create(file.path("4_quantify", "counts")) # file.path is similar to `os.path.join` in Python.
+```
+
+### 5.2.1 Install the dependencies
+
+```{r eval=FALSE}
+# Install BiocManager if not already installed
+if (!requireNamespace("BiocManager", quietly = TRUE)){
+    install.packages("BiocManager")
+}
+BiocManager::install("tximport")
+```
+
+Load the R package.
+
+```{r eval=FALSE}
+library(tximport)
+```
+
+Write a comment next to the code indicating what version of tximport you are using.
+
+You will also need to install and load the `dplyr` R package for data wrangling.
+
+```{r eval=FALSE}
+BiocManager::install("dplyr")
+library(dplyr)
+```
+
+### 5.2.2 List the count files
+
+```{r eval=FALSE}
+files <- list.files(
+  file.path("4_quantify", "gtfs"),
+  full.names = TRUE, # return the entire path
+  recursive = TRUE,  # search within folders
+  pattern = "t_data.ctab$" # find all files that end with "t_data.ctab"
+)
+# convert the vector of paths into a named vector, where the names are the sample names
+names(files) <- basename(dirname(files))
+```
+
+### 5.2.3 Map gene/transcript ids to gene names
+
+Tximport expects a mapping of transcript IDs to gene names, which can be extracted from one of the ctab files.
+
+``` {r eval=FALSE}
+# Read in one of the files
+tmp <- read.delim(files[1])
+
+# Extract the transcript id and gene name information
+tx2gene <- tmp[, c("t_name", "gene_name")]
+```
+
+Separately, we want to know the mapping between gene ids and gene names.
+
+``` {r eval=FALSE}
+id2name <- tmp[, c("gene_id", "gene_name")] |>
+  subset(! gene_name == ".") |>
+  distinct()
+```
+
+- `subset(! gene_name == ".")` removes rows where the gene name is missing (represented by a dot).
+- `distinct()` removes duplicate rows, so that each gene ID is only represented once.
+
+`|>` is the pipe operator, which passes the output of one function to the next function.
+In this case, we're passing the `counts` dataframe to the `subset` function, which will remove features
+with an unknown gene name, indicated by "."
+The `%>%` operator is also a pipe operator that is part of the `dplyr` package.
+They have subtle differences but are overall similar, so we'd recommend using `|>` 
+because it's built into base R.
+
+### 5.2.4 Combine counts across samples
+
+We will use the tximport function to combine the counts.
+
+- tximport documentation: https://www.bioconductor.org/packages//release/bioc/vignettes/tximport/inst/doc/tximport.html#StringTie
+
+``` {r eval=FALSE}
+txi <- tximport(files, type = "stringtie", tx2gene = tx2gene, readLength = 50)
+gene_counts <- txi$counts
+
+# Again removing genes lacking a known gene name for simplicity
+gene_counts <- gene_counts[! rownames(gene_counts) %in% ".", ]
+```
+
+### 5.2.5 Save the count matrix and id2name
+
+Finally, we will save results to CSV files.
+
+``` {r eval=FALSE}
+write.csv(gene_counts, file = file.path("4_quantify", "counts", "counts.csv"))
+write.csv(id2name, file = file.path("4_quantify", "counts", "id2name.csv"))
+```

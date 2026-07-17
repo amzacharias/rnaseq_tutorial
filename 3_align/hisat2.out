@@ -1,0 +1,10 @@
+Job started at 18:55:50
+Input bt2 file: "./hisat2_index/GRCm39_index"
+Query inputs (DNA, FASTQ):
+Quality inputs:
+Output file: "./hisat2_sam/SRR11902288.sam"
+Local endianness: little
+Sanity checking: disabled
+Assertions: disabled
+Trying ./hisat2_index/GRCm39_index
+Job ended at 18:56:48
